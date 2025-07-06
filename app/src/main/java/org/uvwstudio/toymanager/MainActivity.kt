@@ -1,5 +1,7 @@
 package org.uvwstudio.toymanager
-
+import androidx.compose.foundation.Image
+import coil.compose.rememberAsyncImagePainter
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -12,24 +14,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.ui.viewinterop.AndroidView
 
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 import androidx.compose.ui.graphics.Color
 
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.fillMaxSize
 
 import androidx.compose.foundation.background
 
-import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.core.content.FileProvider
+import java.io.File
 
 enum class TabPage {
     STOCK_IN,
@@ -42,17 +46,52 @@ enum class TabPage {
  * 主入口Activity
  */
 class MainActivity : ComponentActivity() {
+
+    private var photoFilePath: String? = null
+
+    // 注册拍照 Launcher
+    private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && photoFilePath != null) {
+            Log.d("Photo", "Photo saved at $photoFilePath")
+            // TODO: 这里可以通知 ViewModel 或 Compose 层，更新对应物品的 photoPath
+            // 比如发送事件或调用回调
+        }
+    }
+
+    // 创建照片文件
+    private fun createImageFile(rfid: String): File {
+        val imageDir = File(filesDir, "images")
+        if (!imageDir.exists()) imageDir.mkdirs()
+        return File(imageDir, "$rfid.png")
+    }
+
+    // 公开给 Compose 调用的拍照函数
+    fun takePhoto(rfid: String) {
+        val photoFile = createImageFile(rfid)
+        photoFilePath = photoFile.absolutePath
+        val photoUri = FileProvider.getUriForFile(
+            this,
+            "${packageName}.fileprovider",
+            photoFile
+        )
+        takePictureLauncher.launch(photoUri)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            ToyManagerAppContent()
+            // 通过 CompositionLocal 或者参数将 takePhoto 函数传给 Compose
+            ToyManagerAppContent(takePhotoCallback = { rfid:String ->
+                takePhoto(rfid)
+            })
         }
     }
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToyManagerAppContent() {
+fun ToyManagerAppContent(takePhotoCallback: (String)->Unit) {
     var scanning by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(TabPage.STOCK_IN) }
 
@@ -110,14 +149,16 @@ fun ToyManagerAppContent() {
             when (selectedTab) {
                 TabPage.STOCK_IN -> StockInScreen(
                     scanning = scanning,
-                    viewModel = inventoryViewModel
+                    viewModel = inventoryViewModel,
+                    takePhoto = takePhotoCallback,
                 )
 
                 TabPage.INVENTORY -> {
                     Log.e("GUI", "Inventory")
                     InventoryScreen(
                         scanning = scanning,
-                        viewModel = inventoryViewModel
+                        viewModel = inventoryViewModel,
+                        takePhoto = takePhotoCallback,
                     )
                 }
 
@@ -133,7 +174,8 @@ fun ToyManagerAppContent() {
 @Composable
 fun StockInScreen(
     scanning: Boolean,
-    viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+    takePhoto: (String) -> Unit
 ) {
     val notInDbMap by viewModel.hitItemNotInDb
     val inDbMap by viewModel.hitItemInDb
@@ -153,22 +195,23 @@ fun StockInScreen(
             var name by remember { mutableStateOf("") }
             var detail by remember { mutableStateOf("") }
 
-            val item = InventoryItem(name = name, rfid = rfid, detail = detail)
-
+            //val item = InventoryItem(name = name, rfid = rfid, detail = detail)
+            var editingItem by remember {
+                mutableStateOf(InventoryItem(rfid = editingRFID!!, name = "", detail = "", photoPath = null))
+            }
             InventoryItemEditDialog(
-                item = item,
-                onItemChange = {
-                    name = it.name
-                    detail = it.detail
-                },
-                onDismissRequest = { editingRFID = null },
-                onConfirm = {
-                    viewModel.upsert(InventoryItem(name, rfid, detail))
+                item = editingItem,
+                onItemChange = { editingItem = it },
+                onDismissRequest = {
                     editingRFID = null
+                    editingItem = InventoryItem("", "", "") // 或 null 看你逻辑
                 },
-                onTakePhoto = {
-                    // TODO 拍照逻辑
+                onConfirm = {
+                    viewModel.upsert(editingItem)
+                    editingRFID = null
+                    editingItem = InventoryItem("", "", "")
                 },
+                onTakePhoto = takePhoto,
                 title = "录入标签"
             )
         }
@@ -275,7 +318,8 @@ fun onStopScan(tab: TabPage, viewModel: InventoryViewModel) {
 @Composable
 fun InventoryScreen(
     scanning: Boolean,
-    viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+    takePhoto: (String) -> Unit,
 ) {
     Log.e("GUI", "Inventory1")
 
@@ -284,27 +328,25 @@ fun InventoryScreen(
         Log.e("DB", i.rfid)
     }
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
-    var editingCopy by remember { mutableStateOf<InventoryItem?>(null) }
 
-    if (editingItem != null && editingCopy != null) {
+    editingItem?.let { item ->
         InventoryItemEditDialog(
-            item = editingCopy!!,
-            onItemChange = { editingCopy = it },
-            onDismissRequest = {
-                editingItem = null
-                editingCopy = null
-            },
+            item = item,
+            onItemChange = { editingItem = it },
+            onDismissRequest = { editingItem = null },
             onConfirm = {
-                viewModel.upsert(editingCopy!!)
+                viewModel.upsert(item)
                 editingItem = null
-                editingCopy = null
             },
-            onTakePhoto = {
-                // TODO 拍照逻辑
+            onTakePhoto = takePhoto,
+            showDeleteButton = true,
+            onDelete = {
+                viewModel.delete(item)
             },
             title = "编辑物品"
         )
     }
+
 
     if (items.isEmpty()) {
         Box(
@@ -324,7 +366,7 @@ fun InventoryScreen(
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                         .clickable {
                             editingItem = item
-                            editingCopy = item.copy()
+                            //editingCopy = item.copy()
                         },
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
@@ -451,8 +493,10 @@ fun InventoryItemEditDialog(
     onItemChange: (InventoryItem) -> Unit,
     onDismissRequest: () -> Unit,
     onConfirm: () -> Unit,
-    onTakePhoto: () -> Unit,
-    title: String = "编辑物品"
+    onTakePhoto: (String) -> Unit,
+    title: String = "编辑物品",
+    showDeleteButton: Boolean = false,
+    onDelete: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -465,14 +509,28 @@ fun InventoryItemEditDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismissRequest) { Text("取消") }
+            Row {
+                TextButton(onClick = onDismissRequest) {
+                    Text("取消")
+                }
+
+                if (showDeleteButton && onDelete != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        onDelete()
+                        onDismissRequest()
+                    }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
         },
         title = { Text(title) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = item.rfid,
-                    onValueChange = { /* 不可编辑，空实现 */ },
+                    onValueChange = {},
                     label = { Text("RFID") },
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true
@@ -491,7 +549,9 @@ fun InventoryItemEditDialog(
                         .fillMaxWidth()
                         .height(100.dp)
                 )
+
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -499,10 +559,21 @@ fun InventoryItemEditDialog(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("照片占位（未来添加）")
+                    val imagePath = item.photoPath
+                    if (imagePath != null && File(imagePath).exists()) {
+                        Image(
+                            painter = rememberAsyncImagePainter(File(imagePath)),
+                            contentDescription = "照片预览",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text("照片占位（未来添加）")
+                    }
                 }
+
                 Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = onTakePhoto) {
+
+                Button(onClick = { onTakePhoto(item.rfid) }) {
                     Text("拍照")
                 }
             }
