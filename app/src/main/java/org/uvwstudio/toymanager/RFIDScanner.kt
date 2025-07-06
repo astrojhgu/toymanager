@@ -16,8 +16,6 @@ import java.util.Hashtable
 
 object RFIDScanner {
     // 这里写属性和方法
-    var powered=false
-    var rfPower=10
     var client=GClient()
 
     fun initDevice(){
@@ -44,7 +42,6 @@ object RFIDScanner {
                 break
             }
         }
-        setRFPwr(rfPower)
     }
 
     private fun openReader(baudRate: String): Boolean {
@@ -61,11 +58,6 @@ object RFIDScanner {
     }
 
     fun queryRFPwr(): Hashtable<Int, Int>?{
-        if (!powered){
-            return Hashtable<Int, Int>().apply {
-                put(1, rfPower)
-            }
-        }
         val msg= MsgBaseGetPower()
         client.sendSynMsgRetry(msg, 10,10)
         if (msg.rtCode.toInt()==0){
@@ -82,10 +74,6 @@ object RFIDScanner {
     }
 
     fun setRFPwr(pwr: Int){
-        rfPower=pwr
-        if (!powered){
-            return
-        }
         val msg= MsgBaseSetPower()
         msg.dicPower= Hashtable<Int, Int>().apply {
             put(1, pwr)
@@ -124,7 +112,6 @@ object RFIDScanner {
         Log.d("RFID", "power=$state Path=$s3")
 
         Thread.sleep(1500);
-        powered=bState
     }
 
 
@@ -163,14 +150,6 @@ object RFIDScanner {
     }
 
     fun stopScan() {
-        if (!powered){
-            Log.e("RFID", "Not powered")
-            return
-        }
-
-
-        //closeDevice()
-
 
         for(i in 0..10){
             val msg= MsgBaseStop()

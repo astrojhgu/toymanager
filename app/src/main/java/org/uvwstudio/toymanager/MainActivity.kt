@@ -1,4 +1,5 @@
 package org.uvwstudio.toymanager
+
 import android.annotation.SuppressLint
 import android.content.Intent
 import androidx.compose.foundation.Image
@@ -52,6 +53,7 @@ import java.util.zip.ZipInputStream
 
 import android.os.Handler
 import android.os.Looper
+import androidx.activity.OnBackPressedCallback
 import kotlin.system.exitProcess
 
 enum class TabPage {
@@ -70,17 +72,19 @@ class MainActivity : ComponentActivity() {
     private var currentTab: TabPage = TabPage.STOCK_IN
     private lateinit var inventoryViewModel: InventoryViewModel
 
-    // 注册拍照 Launcher
-    private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success && photoFilePath != null) {
-            Log.d("Photo", "Photo saved at $photoFilePath")
-            // TODO: 这里可以通知 ViewModel 或 Compose 层，更新对应物品的 photoPath
-            onPhotoTaken?.invoke(photoFilePath!!)
-        }
-        onPhotoTaken=null
-    }
 
-    private var onPhotoTaken: ((String)->Unit)?=null
+    // 注册拍照 Launcher
+    private val takePictureLauncher =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+            if (success && photoFilePath != null) {
+                Log.d("Photo", "Photo saved at $photoFilePath")
+                // TODO: 这里可以通知 ViewModel 或 Compose 层，更新对应物品的 photoPath
+                onPhotoTaken?.invoke(photoFilePath!!)
+            }
+            onPhotoTaken = null
+        }
+
+    private var onPhotoTaken: ((String) -> Unit)? = null
 
     // 创建照片文件
     private fun createImageFile(rfid: String): File {
@@ -90,7 +94,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // 公开给 Compose 调用的拍照函数
-    fun takePhoto(rfid: String,  onResult: (String) -> Unit) {
+    fun takePhoto(rfid: String, onResult: (String) -> Unit) {
         val photoFile = createImageFile(rfid)
         photoFilePath = photoFile.absolutePath
         val photoUri = FileProvider.getUriForFile(
@@ -105,16 +109,53 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         inventoryViewModel = InventoryViewModel(application)
+
+        var lastBackPressedTime: Long = 0
+        val BACK_PRESS_INTERVAL: Long = 2000 // 双击退出的时间间隔
+
+        // 添加自定义的返回键处理
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val currentBackPressedTime = System.currentTimeMillis()
+
+                // 如果两次点击在间隔时间内
+                if (currentBackPressedTime - lastBackPressedTime < BACK_PRESS_INTERVAL) {
+                    // 双击退出
+                    isEnabled = false  // 禁用该回调，防止重复触发
+                    //onBackPressedDispatcher.onBackPressed()  // 执行正常的返回操作
+                    finish()
+                } else {
+                    // 提示用户再按一次退出
+                    Toast.makeText(this@MainActivity, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+                    lastBackPressedTime = currentBackPressedTime  // 更新上次按下时间
+                }
+            }
+        })
+
         setContent {
-            // 通过 CompositionLocal 或者参数将 takePhoto 函数传给 Compose
-            ToyManagerAppContent(takePhotoCallback = { rfid:String ->
-                takePhoto(rfid){}
-            },
+            ToyManagerAppContent(
+                takePhotoCallback = { rfid: String ->
+                    takePhoto(rfid) {}
+                },
                 onTabChanged = { tab -> currentTab = tab },
                 inventoryViewModel = inventoryViewModel
             )
         }
     }
+
+
+
+
+    override fun onStart() {
+        super.onStart()
+        RFIDScanner.initDevice()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        RFIDScanner.closeDevice()
+    }
+
 
     fun performBackup() {
         try {
@@ -194,9 +235,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
-                         onTabChanged: (TabPage) -> Unit,
-                         inventoryViewModel: InventoryViewModel
+fun ToyManagerAppContent(
+    takePhotoCallback: (String) -> Unit,
+    onTabChanged: (TabPage) -> Unit,
+    inventoryViewModel: InventoryViewModel
 ) {
     var scanning by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(TabPage.STOCK_IN) }
@@ -212,10 +254,16 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
         bottomBar = {
             Column {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
-                ){
-                    var rfPower by remember { mutableStateOf(RFIDScanner.queryRFPwr()!!.getValue(1)) }
+                ) {
+                    var rfPower by remember {
+                        mutableStateOf(
+                            RFIDScanner.queryRFPwr()!!.getValue(1)
+                        )
+                    }
 
                     Row(
                         modifier = Modifier
@@ -271,7 +319,7 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
                         Button(onClick = {
                             scanning = true
                             onStartScan(selectedTab, inventoryViewModel)
-                        }, enabled = !scanning && selectedTab!= TabPage.INVENTORY) {
+                        }, enabled = !scanning ) {
 
                             Text("开始扫描")
                         }
@@ -279,12 +327,12 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
                         Button(onClick = {
                             scanning = false
                             onStopScan(selectedTab, inventoryViewModel)
-                        }, enabled = scanning &&  selectedTab!= TabPage.INVENTORY) {
+                        }, enabled = scanning ) {
                             Text("停止扫描")
                         }
                         Spacer(modifier = Modifier.weight(1f))
                         IconButton(onClick = {
-                            showBackupDialog=true
+                            showBackupDialog = true
                         }) {
                             Icon(Icons.Default.Settings, contentDescription = "设置")
                         }
@@ -387,7 +435,14 @@ fun StockInScreen(
 
             //val item = InventoryItem(name = name, rfid = rfid, detail = detail)
             var editingItem by remember {
-                mutableStateOf(InventoryItem(rfid = editingRFID!!, name = "", detail = "", photoPath = null))
+                mutableStateOf(
+                    InventoryItem(
+                        rfid = editingRFID!!,
+                        name = "",
+                        detail = "",
+                        photoPath = null
+                    )
+                )
             }
             InventoryItemEditDialog(
                 item = editingItem,
@@ -462,7 +517,11 @@ fun StockInScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row {
-                            Text("RFID: $rfid", modifier = Modifier.weight(1f), color = Color.DarkGray)
+                            Text(
+                                "RFID: $rfid",
+                                modifier = Modifier.weight(1f),
+                                color = Color.DarkGray
+                            )
                             Text("次数: $count", color = Color.DarkGray)
                         }
                         Spacer(modifier = Modifier.height(4.dp))
@@ -476,24 +535,25 @@ fun StockInScreen(
 
 
 fun onStartScan(tab: TabPage, viewModel: InventoryViewModel) {
-
     when (tab) {
         TabPage.STOCK_IN -> {
             viewModel.clearHitItems()
-            RFIDScanner.initDevice()
-            RFIDScanner.queryRFPwr()
             RFIDScanner.startScan { _, rfid ->
                 Log.d("RFID", rfid)
                 viewModel.hitRFID(rfid)
             }
         }
 
-        TabPage.INVENTORY -> {}
+        TabPage.INVENTORY -> {
+            viewModel.clearHitItems()
+            RFIDScanner.startScan { _, rfid ->
+                Log.d("RFID", rfid)
+                viewModel.hitRFID(rfid)
+            }
+        }
+
         TabPage.STOCK_OUT -> {
             viewModel.clearHitItems()
-            RFIDScanner.initDevice()
-            RFIDScanner.setRFPwr(23)
-            RFIDScanner.queryRFPwr()
             RFIDScanner.startScan { _, rfid ->
                 Log.d("RFID", rfid)
                 viewModel.hitRFID(rfid)
@@ -505,7 +565,6 @@ fun onStartScan(tab: TabPage, viewModel: InventoryViewModel) {
 fun onStopScan(tab: TabPage, viewModel: InventoryViewModel) {
     Log.d("RFID", "Stop Scan clicked")
     RFIDScanner.stopScan()
-    RFIDScanner.closeDevice()
 }
 
 
@@ -516,10 +575,11 @@ fun InventoryScreen(
     takePhoto: (String) -> Unit,
 ) {
     Log.e("GUI", "Inventory1")
+    val inDbMap by viewModel.hitItemInDb
 
     val items by viewModel.allItems.collectAsState(initial = emptyList())
-    for (i in items){
-        Log.e("DB", i.rfid)
+    for (i in items) {
+        Log.d("DB", i.rfid)
     }
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
 
@@ -561,6 +621,8 @@ fun InventoryScreen(
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(items) { item ->
+                val isHit = inDbMap.containsKey(item.rfid)
+                val bgColor = if (isHit) Color(0xFFD0F0C0) else Color.White // 绿色背景表示命中
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -569,6 +631,7 @@ fun InventoryScreen(
                             editingItem = item
                             //editingCopy = item.copy()
                         },
+                    colors = CardDefaults.cardColors(containerColor = bgColor),
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
