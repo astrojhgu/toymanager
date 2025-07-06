@@ -153,72 +153,23 @@ fun StockInScreen(
             var name by remember { mutableStateOf("") }
             var detail by remember { mutableStateOf("") }
 
-            AlertDialog(
+            val item = InventoryItem(name = name, rfid = rfid, detail = detail)
+
+            InventoryItemEditDialog(
+                item = item,
+                onItemChange = {
+                    name = it.name
+                    detail = it.detail
+                },
                 onDismissRequest = { editingRFID = null },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            viewModel.upsert(
-                                InventoryItem(
-                                    name = name,
-                                    rfid = rfid,
-                                    detail = detail
-                                )
-                            )
-                            editingRFID = null
-                        },
-                        enabled = name.isNotBlank()
-                    ) {
-                        Text("确认")
-                    }
+                onConfirm = {
+                    viewModel.upsert(InventoryItem(name, rfid, detail))
+                    editingRFID = null
                 },
-                dismissButton = {
-                    TextButton(onClick = { editingRFID = null }) {
-                        Text("取消")
-                    }
+                onTakePhoto = {
+                    // TODO 拍照逻辑
                 },
-                title = { Text("录入标签") },
-                text = {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = rfid,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("RFID") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = name,
-                            onValueChange = { name = it },
-                            label = { Text("物品名称") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = detail,
-                            onValueChange = { detail = it },
-                            label = { Text("详细信息") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(100.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("照片预览（占位）")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = {
-                            // TODO: 添加拍照逻辑
-                        }) {
-                            Text("拍照")
-                        }
-                    }
-                }
+                title = "录入标签"
             )
         }
     }
@@ -336,56 +287,22 @@ fun InventoryScreen(
     var editingCopy by remember { mutableStateOf<InventoryItem?>(null) }
 
     if (editingItem != null && editingCopy != null) {
-        AlertDialog(
-            onDismissRequest = { editingItem = null; editingCopy = null },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.upsert(editingCopy!!)
-                    editingItem = null
-                    editingCopy = null
-                }) { Text("确认") }
+        InventoryItemEditDialog(
+            item = editingCopy!!,
+            onItemChange = { editingCopy = it },
+            onDismissRequest = {
+                editingItem = null
+                editingCopy = null
             },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { editingCopy = editingItem }) { Text("还原") }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = {
-                        editingItem = null
-                        editingCopy = null
-                    }) { Text("取消") }
-                }
+            onConfirm = {
+                viewModel.upsert(editingCopy!!)
+                editingItem = null
+                editingCopy = null
             },
-            title = { Text("编辑物品") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = editingCopy!!.rfid,
-                        onValueChange = { editingCopy = editingCopy!!.copy(rfid = it) },
-                        label = { Text("RFID编号") }
-                    )
-                    OutlinedTextField(
-                        value = editingCopy!!.name,
-                        onValueChange = { editingCopy = editingCopy!!.copy(name = it) },
-                        label = { Text("物品名称") }
-                    )
-                    OutlinedTextField(
-                        value = editingCopy!!.detail,
-                        onValueChange = { editingCopy = editingCopy!!.copy(detail = it) },
-                        label = { Text("详细信息") },
-                        modifier = Modifier.height(100.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("照片占位（未来添加）")
-                    }
-                }
-            }
+            onTakePhoto = {
+                // TODO 拍照逻辑
+            },
+            title = "编辑物品"
         )
     }
 
@@ -399,18 +316,26 @@ fun InventoryScreen(
             Text("暂无标签数据")
         }
     } else {
-        AndroidView(
-            factory = { ctx ->
-                RecyclerView(ctx).apply {
-                    layoutManager = LinearLayoutManager(ctx)
-                    adapter = InventoryAdapter(items) { clicked ->
-                        editingItem = clicked
-                        editingCopy = clicked.copy()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(items) { item ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clickable {
+                            editingItem = item
+                            editingCopy = item.copy()
+                        },
+                    elevation = CardDefaults.cardElevation(4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("RFID: ${item.rfid}", style = MaterialTheme.typography.bodyMedium)
+                        Text("名称: ${item.name}", style = MaterialTheme.typography.bodySmall)
+                        Text("详情: ${item.detail}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+            }
+        }
     }
 }
 
@@ -517,4 +442,70 @@ fun StockOutScreen(
             }
         }
     }
+}
+
+
+@Composable
+fun InventoryItemEditDialog(
+    item: InventoryItem,
+    onItemChange: (InventoryItem) -> Unit,
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+    onTakePhoto: () -> Unit,
+    title: String = "编辑物品"
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = item.name.isNotBlank()
+            ) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) { Text("取消") }
+        },
+        title = { Text(title) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = item.rfid,
+                    onValueChange = { /* 不可编辑，空实现 */ },
+                    label = { Text("RFID") },
+                    modifier = Modifier.fillMaxWidth(),
+                    readOnly = true
+                )
+                OutlinedTextField(
+                    value = item.name,
+                    onValueChange = { onItemChange(item.copy(name = it)) },
+                    label = { Text("物品名称") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = item.detail,
+                    onValueChange = { onItemChange(item.copy(detail = it)) },
+                    label = { Text("详细信息") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("照片占位（未来添加）")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = onTakePhoto) {
+                    Text("拍照")
+                }
+            }
+        }
+    )
 }
