@@ -2,6 +2,7 @@ package org.uvwstudio.toymanager
 
 import android.content.Context
 import androidx.room.*
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 数据表结构：库存物品
@@ -36,6 +37,9 @@ interface InventoryItemDao {
 
     @Query("DELETE FROM inventory_items")
     suspend fun clearAll()
+
+    @Query("SELECT * FROM inventory_items")
+    fun getAllItemsFlow(): Flow<List<InventoryItemEntity>>
 }
 
 /**

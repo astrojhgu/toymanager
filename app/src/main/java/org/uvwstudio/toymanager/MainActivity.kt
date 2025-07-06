@@ -16,6 +16,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+import androidx.compose.ui.graphics.Color
+
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.compose.runtime.Composable
@@ -25,6 +27,9 @@ import androidx.compose.foundation.background
 
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+
+import androidx.compose.foundation.lazy.items
 
 enum class TabPage {
     STOCK_IN,
@@ -108,10 +113,13 @@ fun ToyManagerAppContent() {
                     viewModel = inventoryViewModel
                 )
 
-                TabPage.INVENTORY -> InventoryScreen(
-                    scanning = scanning,
-                    viewModel = inventoryViewModel
-                )
+                TabPage.INVENTORY -> {
+                    Log.e("GUI", "Inventory")
+                    InventoryScreen(
+                        scanning = scanning,
+                        viewModel = inventoryViewModel
+                    )
+                }
 
                 TabPage.STOCK_OUT -> StockOutScreen(
                     scanning = scanning,
@@ -127,19 +135,19 @@ fun StockInScreen(
     scanning: Boolean,
     viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    // 改为使用 stockInItems，而不是 allItems
-    val stockMap by viewModel.hitItemNotInDb
+    val notInDbMap by viewModel.hitItemNotInDb
+    val inDbMap by viewModel.hitItemInDb
 
-    // 编辑功能保留，但这里只能编辑 RFID（没有绑定的详细信息）
     var editingRFID by remember { mutableStateOf<String?>(null) }
 
-
+    // 如果开始扫描中，立即清除编辑弹窗
     LaunchedEffect(scanning) {
         if (scanning) {
             editingRFID = null
         }
     }
-    // 编辑弹窗，仅允许修改 RFID（示例，真实业务可能不这么做）
+
+    // 编辑弹窗
     if (!scanning) {
         editingRFID?.let { rfid ->
             var name by remember { mutableStateOf("") }
@@ -159,16 +167,14 @@ fun StockInScreen(
                             )
                             editingRFID = null
                         },
-                        enabled = name.isNotBlank() // 名称不能为空
+                        enabled = name.isNotBlank()
                     ) {
                         Text("确认")
                     }
                 },
                 dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            editingRFID = null
-                        }) { Text("取消") }
+                    TextButton(onClick = { editingRFID = null }) {
+                        Text("取消")
                     }
                 },
                 title = { Text("录入标签") },
@@ -217,37 +223,61 @@ fun StockInScreen(
         }
     }
 
-
-    // 主界面：显示扫描到的 RFID 列表
-    if (stockMap.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("尚未扫描到任何 RFID 标签")
-        }
-    } else {
-        Column(modifier = Modifier
-            .fillMaxSize()
-            .padding(8.dp)) {
-            stockMap.entries.forEach { (rfid, count) ->
+    // 列表展示：优先 NotInDb（白底可编辑），后 InDb（灰底不可点）
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // Not in DB
+        if (notInDbMap.isNotEmpty()) {
+            item {
+                Text(
+                    "新标签",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            items(notInDbMap.entries.toList()) { (rfid, count) ->
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clickable { editingRFID = rfid },
-                    elevation = CardDefaults.cardElevation()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clickable(enabled = !scanning) {
+                            if (!scanning) editingRFID = rfid
+                        },
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = rfid)
-                        Text(text = "扫描次数: $count")
+                    Row(modifier = Modifier.padding(16.dp)) {
+                        Text("RFID: $rfid", modifier = Modifier.weight(1f))
+                        Text("次数: $count")
+                    }
+                }
+            }
+        }
+
+        // In DB
+        if (inDbMap.isNotEmpty()) {
+            item {
+                Text(
+                    "已存在标签",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            items(inDbMap.entries.toList()) { (rfid, pair) ->
+                val (name, count) = pair
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.LightGray),
+                    elevation = CardDefaults.cardElevation(1.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row {
+                            Text("RFID: $rfid", modifier = Modifier.weight(1f), color = Color.DarkGray)
+                            Text("次数: $count", color = Color.DarkGray)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("名称: $name", color = Color.DarkGray)
                     }
                 }
             }
@@ -266,12 +296,21 @@ fun onStartScan(tab: TabPage, viewModel: InventoryViewModel) {
             RFIDScanner.queryRFPwr()
             RFIDScanner.startScan { _, rfid ->
                 Log.d("RFID", rfid)
-                viewModel.hitRFIDStockIn(rfid)
+                viewModel.hitRFID(rfid)
             }
         }
 
         TabPage.INVENTORY -> {}
-        TabPage.STOCK_OUT -> {}
+        TabPage.STOCK_OUT -> {
+            viewModel.clearHitItems()
+            RFIDScanner.initDevice()
+            RFIDScanner.setRFPwr(23)
+            RFIDScanner.queryRFPwr()
+            RFIDScanner.startScan { _, rfid ->
+                Log.d("RFID", rfid)
+                viewModel.hitRFID(rfid)
+            }
+        }
     }
 }
 
@@ -287,7 +326,12 @@ fun InventoryScreen(
     scanning: Boolean,
     viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    val items by viewModel.allItems.observeAsState(initial = emptyList<InventoryItem>())
+    Log.e("GUI", "Inventory1")
+
+    val items by viewModel.allItems.collectAsState(initial = emptyList())
+    for (i in items){
+        Log.e("DB", i.rfid)
+    }
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var editingCopy by remember { mutableStateOf<InventoryItem?>(null) }
 
@@ -375,8 +419,102 @@ fun StockOutScreen(
     scanning: Boolean,
     viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    // TODO: 出库页面：扫码确认出库，更新数据库状态
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("出库页面内容（待实现）")
+    val notInDbMap by viewModel.hitItemNotInDb
+    val inDbMap by viewModel.hitItemInDb
+
+    var editingRFID by remember { mutableStateOf<String?>(null) }
+
+    // 如果正在扫描，清除弹窗
+    LaunchedEffect(scanning) {
+        if (scanning) editingRFID = null
+    }
+
+    // 弹窗（只对已存在标签生效）
+    if (!scanning) {
+        editingRFID?.let { rfid ->
+            val (name, _) = inDbMap[rfid] ?: return@let
+            AlertDialog(
+                onDismissRequest = { editingRFID = null },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.removeRFID(rfid)
+                        editingRFID = null
+                    }) { Text("删除") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { editingRFID = null }) {
+                        Text("取消")
+                    }
+                },
+                title = { Text("出库标签") },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text("RFID：$rfid")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("名称：$name")
+                    }
+                }
+            )
+        }
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // 已存在标签（可点击出库）
+        if (inDbMap.isNotEmpty()) {
+            item {
+                Text(
+                    "可出库标签",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            items(inDbMap.entries.toList()) { (rfid, pair) ->
+                val (name, count) = pair
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clickable(enabled = !scanning) {
+                            if (!scanning) editingRFID = rfid
+                        },
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row {
+                            Text("RFID: $rfid", modifier = Modifier.weight(1f))
+                            Text("次数: $count")
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("名称: $name")
+                    }
+                }
+            }
+        }
+
+        // 不在库标签（不可点击）
+        if (notInDbMap.isNotEmpty()) {
+            item {
+                Text(
+                    "未知标签",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            items(notInDbMap.entries.toList()) { (rfid, count) ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.LightGray),
+                    elevation = CardDefaults.cardElevation(1.dp)
+                ) {
+                    Row(modifier = Modifier.padding(16.dp)) {
+                        Text("RFID: $rfid", modifier = Modifier.weight(1f), color = Color.DarkGray)
+                        Text("次数: $count", color = Color.DarkGray)
+                    }
+                }
+            }
+        }
     }
 }
