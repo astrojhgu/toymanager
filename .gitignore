@@ -1,0 +1,46 @@
+# === Android Studio ===
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# === Gradle ===
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# === Local Configuration ===
+local.properties
+
+# === OS-specific files ===
+.DS_Store
+Thumbs.db
+
+# === Kotlin ===
+*.kotlin_module
+
+# === Logs and generated files ===
+*.log
+*.tmp
+
+# === Android specific ===
+*.apk
+*.ap_
+*.dex
+*.class
+
+# === Jetpack Compose Preview caches ===
+**/.compose-cache/
+
+# === NDK/CMake outputs (if used) ===
+.externalNativeBuild/
+.cxx/
+
+# === Room schema files ===
+# 如果你使用 Room 并开启了 schema 导出功能，请删除下一行
+# app/schemas/
+
+# === Misc ===
+captures/
+outputs/
