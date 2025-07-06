@@ -271,7 +271,7 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
                         Button(onClick = {
                             scanning = true
                             onStartScan(selectedTab, inventoryViewModel)
-                        }, enabled = !scanning) {
+                        }, enabled = !scanning && selectedTab!= TabPage.INVENTORY) {
 
                             Text("开始扫描")
                         }
@@ -279,7 +279,7 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
                         Button(onClick = {
                             scanning = false
                             onStopScan(selectedTab, inventoryViewModel)
-                        }, enabled = scanning) {
+                        }, enabled = scanning &&  selectedTab!= TabPage.INVENTORY) {
                             Text("停止扫描")
                         }
                         Spacer(modifier = Modifier.weight(1f))
@@ -699,6 +699,32 @@ fun InventoryItemEditDialog(
     showDeleteButton: Boolean = false,
     onDelete: (() -> Unit)? = null
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    // 删除确认弹窗
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("确认删除") },
+            text = { Text("确定要删除该物品吗？此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete?.invoke()
+                    showDeleteConfirm = false
+                    onDismissRequest()
+                }) {
+                    Text("确认", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // 主编辑弹窗
     AlertDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = {
@@ -717,10 +743,7 @@ fun InventoryItemEditDialog(
 
                 if (showDeleteButton && onDelete != null) {
                     Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = {
-                        onDelete()
-                        onDismissRequest()
-                    }) {
+                    TextButton(onClick = { showDeleteConfirm = true }) {
                         Text("删除", color = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -781,6 +804,7 @@ fun InventoryItemEditDialog(
         }
     )
 }
+
 
 @Composable
 fun BackupRestoreDialog(
