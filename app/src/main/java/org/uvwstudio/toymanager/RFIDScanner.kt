@@ -61,6 +61,11 @@ object RFIDScanner {
     }
 
     fun queryRFPwr(): Hashtable<Int, Int>?{
+        if (!powered){
+            return Hashtable<Int, Int>().apply {
+                put(1, rfPower)
+            }
+        }
         val msg= MsgBaseGetPower()
         client.sendSynMsgRetry(msg, 10,10)
         if (msg.rtCode.toInt()==0){

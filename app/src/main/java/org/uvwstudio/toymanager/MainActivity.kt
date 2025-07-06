@@ -1,9 +1,13 @@
 package org.uvwstudio.toymanager
+import android.annotation.SuppressLint
+import android.content.Intent
 import androidx.compose.foundation.Image
 import coil.compose.rememberAsyncImagePainter
 import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -30,10 +34,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
+
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
+
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.util.zip.ZipInputStream
+
+import android.os.Handler
+import android.os.Looper
+import kotlin.system.exitProcess
 
 enum class TabPage {
     STOCK_IN,
@@ -48,15 +67,20 @@ enum class TabPage {
 class MainActivity : ComponentActivity() {
 
     private var photoFilePath: String? = null
+    private var currentTab: TabPage = TabPage.STOCK_IN
+    private lateinit var inventoryViewModel: InventoryViewModel
 
     // 注册拍照 Launcher
     private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success && photoFilePath != null) {
             Log.d("Photo", "Photo saved at $photoFilePath")
             // TODO: 这里可以通知 ViewModel 或 Compose 层，更新对应物品的 photoPath
-            // 比如发送事件或调用回调
+            onPhotoTaken?.invoke(photoFilePath!!)
         }
+        onPhotoTaken=null
     }
+
+    private var onPhotoTaken: ((String)->Unit)?=null
 
     // 创建照片文件
     private fun createImageFile(rfid: String): File {
@@ -66,7 +90,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // 公开给 Compose 调用的拍照函数
-    fun takePhoto(rfid: String) {
+    fun takePhoto(rfid: String,  onResult: (String) -> Unit) {
         val photoFile = createImageFile(rfid)
         photoFilePath = photoFile.absolutePath
         val photoUri = FileProvider.getUriForFile(
@@ -74,56 +98,200 @@ class MainActivity : ComponentActivity() {
             "${packageName}.fileprovider",
             photoFile
         )
+        onPhotoTaken = onResult
         takePictureLauncher.launch(photoUri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        inventoryViewModel = InventoryViewModel(application)
         setContent {
             // 通过 CompositionLocal 或者参数将 takePhoto 函数传给 Compose
             ToyManagerAppContent(takePhotoCallback = { rfid:String ->
-                takePhoto(rfid)
-            })
+                takePhoto(rfid){}
+            },
+                onTabChanged = { tab -> currentTab = tab },
+                inventoryViewModel = inventoryViewModel
+            )
         }
     }
+
+    fun performBackup() {
+        try {
+            val dbFile = File(getDatabasePath("toymanager.db").absolutePath)
+            val imagesDir = File(filesDir, "images")
+            val outputZip = File("/sdcard/Download/toy_manager_data.zip")
+
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(outputZip))).use { zipOut ->
+                // 添加数据库
+                zipOut.putNextEntry(ZipEntry("toymanager.db"))
+                dbFile.inputStream().use { it.copyTo(zipOut) }
+                zipOut.closeEntry()
+
+                // 添加图片
+                imagesDir.listFiles()?.forEach { file ->
+                    zipOut.putNextEntry(ZipEntry("images/${file.name}"))
+                    file.inputStream().use { it.copyTo(zipOut) }
+                    zipOut.closeEntry()
+                }
+            }
+
+            Toast.makeText(this, "备份完成：${outputZip.absolutePath}", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "备份失败: ${e.message}", Toast.LENGTH_LONG).show()
+            Log.e("BACKUP", "备份失败: ${e.message}")
+        }
+    }
+
+    fun performRestore() {
+        try {
+            val zipFile = File("/sdcard/Download/toy_manager_data.zip")
+            if (!zipFile.exists()) {
+                Toast.makeText(this, "未找到备份文件", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zipIn ->
+                var entry: ZipEntry?
+                while (zipIn.nextEntry.also { entry = it } != null) {
+                    entry?.let { e ->
+                        val outFile = if (e.name == "toymanager.db") {
+                            getDatabasePath("toymanager.db")
+                        } else if (e.name.startsWith("images/")) {
+                            File(filesDir, e.name)
+                        } else return@let
+
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { zipIn.copyTo(it) }
+                    }
+                }
+            }
+
+            Toast.makeText(this, "恢复完成，应用即将重启", Toast.LENGTH_LONG).show()
+            Handler(Looper.getMainLooper()).postDelayed({
+                val pm = packageManager
+                val intent = pm.getLaunchIntentForPackage(packageName)
+                intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                startActivity(intent)
+                exitProcess(0)
+            }, 2000)
+        } catch (e: Exception) {
+            Toast.makeText(this, "恢复失败: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+
+    /*
+    @SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            Log.d("KeyTest", "Key down: code=${event.keyCode}, scanCode=${event.scanCode}")
+        }
+        return super.dispatchKeyEvent(event)
+    }*/
 }
 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToyManagerAppContent(takePhotoCallback: (String)->Unit) {
+fun ToyManagerAppContent(takePhotoCallback: (String)->Unit,
+                         onTabChanged: (TabPage) -> Unit,
+                         inventoryViewModel: InventoryViewModel
+) {
     var scanning by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(TabPage.STOCK_IN) }
 
-    val inventoryViewModel: InventoryViewModel = viewModel()
+    var showBackupDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedTab) {
+        onTabChanged(selectedTab)
+    }
+
+    //inventoryViewModel = viewModel()
     Scaffold(
         bottomBar = {
-            BottomAppBar(
-                modifier = Modifier.height(56.dp),
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                content = {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = {
-                        scanning = true
-                        onStartScan(selectedTab, inventoryViewModel)
-                    }, enabled = !scanning) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ){
+                    var rfPower by remember { mutableStateOf(RFIDScanner.queryRFPwr()!!.getValue(1)) }
 
-                        Text("开始扫描")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("功率：", modifier = Modifier.padding(end = 4.dp))
+
+                        Slider(
+                            value = rfPower.toFloat(),
+                            onValueChange = { rfPower = it.toInt() },
+                            valueRange = 5f..33f,
+                            steps = 28,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                val current = RFIDScanner.queryRFPwr()!!.getValue(1)
+                                rfPower = current
+                                Log.d("RFPower", "查询功率：$current")
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            enabled = !scanning
+
+                        ) {
+                            Text("查询")
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                RFIDScanner.setRFPwr(rfPower)
+                                Log.d("RFPower", "设置功率为：$rfPower")
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            enabled = !scanning
+                        ) {
+                            Text("设置")
+                        }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = {
-                        scanning = false
-                        onStopScan(selectedTab, inventoryViewModel)
-                    }, enabled = scanning) {
-                        Text("停止扫描")
-                    }
-                    Spacer(modifier = Modifier.weight(1f))
-                    IconButton(onClick = { /* TODO: 设置界面逻辑 */ }) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
                 }
-            )
+
+                BottomAppBar(
+                    modifier = Modifier.height(56.dp),
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    content = {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            scanning = true
+                            onStartScan(selectedTab, inventoryViewModel)
+                        }, enabled = !scanning) {
+
+                            Text("开始扫描")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            scanning = false
+                            onStopScan(selectedTab, inventoryViewModel)
+                        }, enabled = scanning) {
+                            Text("停止扫描")
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        IconButton(onClick = {
+                            showBackupDialog=true
+                        }) {
+                            Icon(Icons.Default.Settings, contentDescription = "设置")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         Column(
@@ -139,12 +307,13 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit) {
                 Tab(
                     selected = selectedTab == TabPage.INVENTORY,
                     onClick = { if (!scanning) selectedTab = TabPage.INVENTORY },
-                    text = { Text("盘点/寻找") })
+                    text = { Text("数据库") })
                 Tab(
                     selected = selectedTab == TabPage.STOCK_OUT,
                     onClick = { if (!scanning) selectedTab = TabPage.STOCK_OUT },
                     text = { Text("出库") })
             }
+
 
             when (selectedTab) {
                 TabPage.STOCK_IN -> StockInScreen(
@@ -168,6 +337,24 @@ fun ToyManagerAppContent(takePhotoCallback: (String)->Unit) {
                 )
             }
         }
+    }
+
+    if (showBackupDialog) {
+
+        val context = LocalContext.current
+        val activity = context.findActivity() as? MainActivity
+
+        BackupRestoreDialog(
+            onDismiss = { showBackupDialog = false },
+            onBackup = {
+                activity?.performBackup()
+                showBackupDialog = false
+            },
+            onRestore = {
+                activity?.performRestore()
+                showBackupDialog = false
+            }
+        )
     }
 }
 
@@ -195,6 +382,9 @@ fun StockInScreen(
             var name by remember { mutableStateOf("") }
             var detail by remember { mutableStateOf("") }
 
+            val context = LocalContext.current
+            val activity = context.findActivity() as? MainActivity
+
             //val item = InventoryItem(name = name, rfid = rfid, detail = detail)
             var editingItem by remember {
                 mutableStateOf(InventoryItem(rfid = editingRFID!!, name = "", detail = "", photoPath = null))
@@ -211,7 +401,12 @@ fun StockInScreen(
                     editingRFID = null
                     editingItem = InventoryItem("", "", "")
                 },
-                onTakePhoto = takePhoto,
+                onTakePhoto = { rfid ->
+                    activity?.takePhoto(rfid) { photoPath ->
+                        editingItem = editingItem.copy(photoPath = photoPath)
+                        viewModel.upsert(editingItem!!)
+                    }
+                },
                 title = "录入标签"
             )
         }
@@ -286,7 +481,6 @@ fun onStartScan(tab: TabPage, viewModel: InventoryViewModel) {
         TabPage.STOCK_IN -> {
             viewModel.clearHitItems()
             RFIDScanner.initDevice()
-            RFIDScanner.setRFPwr(23)
             RFIDScanner.queryRFPwr()
             RFIDScanner.startScan { _, rfid ->
                 Log.d("RFID", rfid)
@@ -330,6 +524,8 @@ fun InventoryScreen(
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
 
     editingItem?.let { item ->
+        val context = LocalContext.current
+        val activity = context.findActivity() as? MainActivity
         InventoryItemEditDialog(
             item = item,
             onItemChange = { editingItem = it },
@@ -338,7 +534,12 @@ fun InventoryScreen(
                 viewModel.upsert(item)
                 editingItem = null
             },
-            onTakePhoto = takePhoto,
+            onTakePhoto = { rfid ->
+                activity?.takePhoto(rfid) { photoPath ->
+                    editingItem = editingItem?.copy(photoPath = photoPath)
+                    viewModel.upsert(editingItem!!)
+                }
+            },
             showDeleteButton = true,
             onDelete = {
                 viewModel.delete(item)
@@ -580,3 +781,41 @@ fun InventoryItemEditDialog(
         }
     )
 }
+
+@Composable
+fun BackupRestoreDialog(
+    onDismiss: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("数据管理") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("你可以备份或恢复 ToyManager 的数据库和图片文件。")
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onBackup,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("备份")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onRestore,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("恢复")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
