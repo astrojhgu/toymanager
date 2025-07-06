@@ -5,9 +5,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 
@@ -31,8 +29,10 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }*/
 
     private val dao = DbManager.getDatabase(application).inventoryItemDao()
-    private val _stockInItems = mutableStateOf<Map<String, Int>>(emptyMap())
-    val stockInItems: State<Map<String, Int>> get() = _stockInItems
+    private val _hitItemNotInDb = mutableStateOf<Map<String, Int>>(emptyMap())
+    val hitItemNotInDb: State<Map<String, Int>> get() = _hitItemNotInDb
+    private val _hitItemInDb = mutableStateOf<Map<String, Int>>(emptyMap())
+    val hitItemInDb: State<Map<String, Int>> get() = _hitItemInDb
 
 
     // 使用 LiveData 显示所有物品
@@ -41,22 +41,50 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         emit(list.map { it.toModel() })
     }
 
-    fun clearStockInItems() {
-        _stockInItems.value = emptyMap()
+    fun hitRFID(rfid: String) {
+        // 优先判断是否已经在两个 Map 中
+        if (_hitItemInDb.value.containsKey(rfid)) {
+            _hitItemInDb.value = _hitItemInDb.value.toMutableMap().also {
+                it[rfid] = it.getValue(rfid) + 1
+            }
+            return
+        }
+
+        if (_hitItemNotInDb.value.containsKey(rfid)) {
+            _hitItemNotInDb.value = _hitItemNotInDb.value.toMutableMap().also {
+                it[rfid] = it.getValue(rfid) + 1
+            }
+            return
+        }
+
+        // 启动后台任务查询数据库（首次出现）
+        viewModelScope.launch(Dispatchers.IO) {
+            val exists = dao.getItemByRfid(rfid) != null
+            if (exists) {
+                _hitItemInDb.value = _hitItemInDb.value.toMutableMap().also {
+                    it[rfid] = 1
+                }
+            } else {
+                _hitItemNotInDb.value = _hitItemNotInDb.value.toMutableMap().also {
+                    it[rfid] = 1
+                }
+            }
+        }
     }
 
-    fun hitRFID(rfid: String) {
-        val currentMap = _stockInItems.value.toMutableMap()
-        val count = currentMap.getOrPut(rfid) { 0 }
-        currentMap[rfid] = count + 1
-        _stockInItems.value = currentMap // 触发 UI 更新
-        Log.d("RFID", "RFID:$rfid, cnt: ${count + 1}")
+    fun clearHitItems() {
+        _hitItemInDb.value = emptyMap()
+        _hitItemNotInDb.value = emptyMap()
+    }
+
+    fun hitRFIDStockIn(rfid: String) {
+        hitRFID(rfid)
     }
 
     fun removeRFID(rfid: String) {
-        val current = _stockInItems.value.toMutableMap()
+        val current = _hitItemNotInDb.value.toMutableMap()
         current.remove(rfid)
-        _stockInItems.value = current
+        _hitItemNotInDb.value = current
     }
 
     // 插入或更新

@@ -1,6 +1,7 @@
 package org.uvwstudio.toymanager
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,7 @@ enum class TabPage {
     INVENTORY,
     STOCK_OUT
 }
+
 /**
  * ToyManager - RFID仓库管理App
  * 主入口Activity
@@ -49,7 +51,7 @@ fun ToyManagerAppContent() {
     var scanning by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(TabPage.STOCK_IN) }
 
-
+    val inventoryViewModel: InventoryViewModel = viewModel()
     Scaffold(
         bottomBar = {
             BottomAppBar(
@@ -57,12 +59,18 @@ fun ToyManagerAppContent() {
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 content = {
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { scanning = true }, enabled = !scanning) {
+                    Button(onClick = {
+                        scanning = true
+                        onStartScan(selectedTab, inventoryViewModel)
+                    }, enabled = !scanning) {
 
                         Text("开始扫描")
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { scanning = false }, enabled = scanning) {
+                    Button(onClick = {
+                        scanning = false
+                        onStopScan(selectedTab, inventoryViewModel)
+                    }, enabled = scanning) {
                         Text("停止扫描")
                     }
                     Spacer(modifier = Modifier.weight(1f))
@@ -80,18 +88,35 @@ fun ToyManagerAppContent() {
                 .fillMaxSize()
         ) {
             TabRow(selectedTabIndex = selectedTab.ordinal) {
-                Tab(selected = selectedTab == TabPage.STOCK_IN, onClick = { selectedTab = TabPage.STOCK_IN }, text = { Text("入库") })
-                Tab(selected = selectedTab == TabPage.INVENTORY, onClick = { selectedTab = TabPage.INVENTORY }, text = { Text("盘点/寻找") })
-                Tab(selected = selectedTab == TabPage.STOCK_OUT, onClick = { selectedTab = TabPage.STOCK_OUT }, text = { Text("出库") })
+                Tab(
+                    selected = selectedTab == TabPage.STOCK_IN,
+                    onClick = { if (!scanning) selectedTab = TabPage.STOCK_IN },
+                    text = { Text("入库") })
+                Tab(
+                    selected = selectedTab == TabPage.INVENTORY,
+                    onClick = { if (!scanning) selectedTab = TabPage.INVENTORY },
+                    text = { Text("盘点/寻找") })
+                Tab(
+                    selected = selectedTab == TabPage.STOCK_OUT,
+                    onClick = { if (!scanning) selectedTab = TabPage.STOCK_OUT },
+                    text = { Text("出库") })
             }
 
-            val inventoryViewModel: InventoryViewModel = viewModel()
-
-
             when (selectedTab) {
-                TabPage.STOCK_IN -> StockInScreen(scanning = scanning, viewModel = inventoryViewModel)
-                TabPage.INVENTORY -> InventoryScreen(viewModel = inventoryViewModel)
-                TabPage.STOCK_OUT -> StockOutScreen()
+                TabPage.STOCK_IN -> StockInScreen(
+                    scanning = scanning,
+                    viewModel = inventoryViewModel
+                )
+
+                TabPage.INVENTORY -> InventoryScreen(
+                    scanning = scanning,
+                    viewModel = inventoryViewModel
+                )
+
+                TabPage.STOCK_OUT -> StockOutScreen(
+                    scanning = scanning,
+                    viewModel = inventoryViewModel
+                )
             }
         }
     }
@@ -103,101 +128,93 @@ fun StockInScreen(
     viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     // 改为使用 stockInItems，而不是 allItems
-    val stockMap by viewModel.stockInItems
+    val stockMap by viewModel.hitItemNotInDb
 
     // 编辑功能保留，但这里只能编辑 RFID（没有绑定的详细信息）
     var editingRFID by remember { mutableStateOf<String?>(null) }
 
-    // 启动或停止扫描逻辑
+
     LaunchedEffect(scanning) {
         if (scanning) {
-            viewModel.clearStockInItems()
-            RFIDScanner.initDevice()
-            RFIDScanner.setRFPwr(23)
-            RFIDScanner.queryRFPwr()
-            RFIDScanner.startScan { _, rfid ->
-                viewModel.hitRFID(rfid)
-            }
-        } else {
-            RFIDScanner.stopScan()
-            RFIDScanner.closeDevice()
+            editingRFID = null
         }
     }
-
     // 编辑弹窗，仅允许修改 RFID（示例，真实业务可能不这么做）
-    editingRFID?.let { rfid ->
-        var name by remember { mutableStateOf("") }
-        var detail by remember { mutableStateOf("") }
+    if (!scanning) {
+        editingRFID?.let { rfid ->
+            var name by remember { mutableStateOf("") }
+            var detail by remember { mutableStateOf("") }
 
-        AlertDialog(
-            onDismissRequest = { editingRFID = null },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.upsert(
-                            InventoryItem(
-                                name = name,
-                                rfid = rfid,
-                                detail = detail
+            AlertDialog(
+                onDismissRequest = { editingRFID = null },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.upsert(
+                                InventoryItem(
+                                    name = name,
+                                    rfid = rfid,
+                                    detail = detail
+                                )
                             )
-                        )
-                        editingRFID = null
-                    },
-                    enabled = name.isNotBlank() // 名称不能为空
-                ) {
-                    Text("确认")
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        editingRFID = null
-                    }) { Text("取消") }
-                }
-            },
-            title = { Text("录入标签") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = rfid,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("RFID") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("物品名称") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = detail,
-                        onValueChange = { detail = it },
-                        label = { Text("详细信息") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(100.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
+                            editingRFID = null
+                        },
+                        enabled = name.isNotBlank() // 名称不能为空
                     ) {
-                        Text("照片预览（占位）")
+                        Text("确认")
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = {
-                        // TODO: 添加拍照逻辑
-                    }) {
-                        Text("拍照")
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            editingRFID = null
+                        }) { Text("取消") }
+                    }
+                },
+                title = { Text("录入标签") },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = rfid,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("RFID") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("物品名称") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = detail,
+                            onValueChange = { detail = it },
+                            label = { Text("详细信息") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(100.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("照片预览（占位）")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = {
+                            // TODO: 添加拍照逻辑
+                        }) {
+                            Text("拍照")
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
     }
 
 
@@ -212,7 +229,9 @@ fun StockInScreen(
             Text("尚未扫描到任何 RFID 标签")
         }
     } else {
-        Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+        Column(modifier = Modifier
+            .fillMaxSize()
+            .padding(8.dp)) {
             stockMap.entries.forEach { (rfid, count) ->
                 Card(
                     modifier = Modifier
@@ -237,8 +256,35 @@ fun StockInScreen(
 }
 
 
+fun onStartScan(tab: TabPage, viewModel: InventoryViewModel) {
+
+    when (tab) {
+        TabPage.STOCK_IN -> {
+            viewModel.clearHitItems()
+            RFIDScanner.initDevice()
+            RFIDScanner.setRFPwr(23)
+            RFIDScanner.queryRFPwr()
+            RFIDScanner.startScan { _, rfid ->
+                Log.d("RFID", rfid)
+                viewModel.hitRFIDStockIn(rfid)
+            }
+        }
+
+        TabPage.INVENTORY -> {}
+        TabPage.STOCK_OUT -> {}
+    }
+}
+
+fun onStopScan(tab: TabPage, viewModel: InventoryViewModel) {
+    Log.d("RFID", "Stop Scan clicked")
+    RFIDScanner.stopScan()
+    RFIDScanner.closeDevice()
+}
+
+
 @Composable
 fun InventoryScreen(
+    scanning: Boolean,
     viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val items by viewModel.allItems.observeAsState(initial = emptyList<InventoryItem>())
@@ -325,7 +371,10 @@ fun InventoryScreen(
 }
 
 @Composable
-fun StockOutScreen() {
+fun StockOutScreen(
+    scanning: Boolean,
+    viewModel: InventoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+) {
     // TODO: 出库页面：扫码确认出库，更新数据库状态
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text("出库页面内容（待实现）")
